@@ -2,4 +2,5 @@
 !/CDL_2020_docs.tex
 !/CDL_2020_docs.pdf
 /*.svg
-*/__pycache__/*
+Project_1_RBM_and_Tomography/__pycache__/
+/*.pyc
