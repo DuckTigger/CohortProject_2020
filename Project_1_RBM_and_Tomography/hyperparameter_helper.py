@@ -110,17 +110,18 @@ class H2HyperparameterSearch:
         rbm_samples = rbm.draw_samples(100, init_state)
         energies = H2_energy_calculator.energy(rbm_samples, self.coeff, rbm.wavefunction)
         accuracy = np.abs(np.abs(energies.item() - self.true_energy) / self.true_energy) * 100
-        results = results.append({'n_hidden': n_hdn, 'epochs': self.epochs, 'n_samples': self.n_samples,
-                                  'molecule': 'H2', 'final_energy': energies.item(), 'true_energy': self.true_energy,
-                                  'accuracy': accuracy, 'time': time_taken}, ignore_index=True)
+        results = results.append({'n_hidden': n_hdn, 'learning_rate': lr, 'epochs': self.epochs,
+                                  'n_samples': self.n_samples, 'molecule': 'H2', 'final_energy': energies.item(),
+                                  'true_energy': self.true_energy, 'accuracy': accuracy, 'time': time_taken},
+                                 ignore_index=True)
         if self.v:
-            print('Training finished.\nFinal energy: {}\nAccuracy: {:.2f}%\nTime taken sampling: {}'.format(
+            print('Training finished.\nFinal energy: {}\nAccuracy: {:.2f}%\nTime taken sampling: {}\n\n'.format(
                 energies.item(), accuracy, sampling_time))
         return results
 
     def search_hyperparams(self):
         results = pd.DataFrame()
-        path = os.path.join(self.save_loc, 'H2_hyperparam_search.pkl')
+        path = os.path.join(self.save_loc, 'H2_hyperparam_search_0.pkl')
         for lr, n_hdn in self.grid:
             result = self.train_given_params(lr, n_hdn)
             results = results.append(result, ignore_index=True)
