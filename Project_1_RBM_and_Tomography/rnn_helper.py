@@ -1,7 +1,9 @@
 import tensorflow as tf
 from tensorflow.keras import layers
 import torch
+import pandas as pd
 import numpy as np
+import pickle as pkl
 import os
 
 import H2_energy_calculator
@@ -10,9 +12,11 @@ BATCH_SIZE=10
 
 class RNN:
 
-    def __init__(self, n_vis: int, n_hdn: int):
+    def __init__(self, n_vis: int, n_hdn: int, optimiser: tf.keras.optimizers.Optimizer, loss_fn: tf.keras.losses.Loss):
         self.n_vis = n_vis
         self.n_hdn = n_hdn
+        self.optimiser = optimiser
+        self.loss_fn = loss_fn
         self.rnn = self.model()
 
     def model(self):
@@ -28,6 +32,16 @@ class RNN:
         output += bias
         return output
 
+    @tf.function
+    def train_step(self, batch):
+        with tf.GradientTape() as tape:
+            batch = tf.reshape(batch, (1, BATCH_SIZE, self.n_vis))
+            sample = self.rnn(batch)
+            loss = tf.reduce_mean(self.loss_fn(batch, sample))
+        grads = tape.gradient(loss, self.rnn.trainable_weights)
+        self.optimiser.apply_gradients(zip(grads, self.rnn.trainable_weights))
+        return loss
+
 
 class RNNHelper:
 
@@ -39,6 +53,7 @@ class RNNHelper:
         self.n_hdn = n_hdn
         self.v = verbose
         self.loc = loc
+        self.result_path = os.path.join(self.loc, 'rnn_results')
         self.loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
         self.optimiser = tf.keras.optimizers.Adam(self.lr)
 
@@ -60,45 +75,50 @@ class RNNHelper:
             samples.append((train, test))
         return coeffs, samples, true_energies
 
+    def create_and_train_rnn(self, coeff, train, test, true_energy):
+        results = pd.DataFrame()
+        r = coeff[0]
+        if self.v:
+            print('\n\nR = {}'.format(r))
+        rnn = RNN(self.n_vis, self.n_hdn, self.optimiser, self.loss_fn)
+        model = rnn.rnn
+        for e in range(self.epochs):
+            if self.v:
+                print('Start of epoch {}'.format(e))
+            for step, x_batch in enumerate(train):
+                loss = rnn.train_step(x_batch)
+                if step % 100 == 0:
+                    energies = []
+                    acc = []
+                    for init in test:
+                        test = tf.reshape(init, (1, BATCH_SIZE, self.n_vis))
+                        predictions = model.predict_on_batch(test)
+                        clip_pred = tf.clip_by_value(predictions, 0, 1)
+                        torch_pred = torch.from_numpy(clip_pred.numpy())
+                        energy = H2_energy_calculator.energy_from_freq(torch_pred, coeff)
+                        energies.append(energy)
+                        accuracy = 1 - np.abs(np.abs(energy - true_energy) / true_energy)
+                        acc.append(accuracy)
+                    step_energy = tf.reduce_mean(energies)
+                    step_accuracy = tf.reduce_mean(acc)
+                    if self.v:
+                        print('Step: {}, loss: {}\nEnergy: {}\nAccuracy: {}'.format(step, loss,
+                                                                                    step_energy,
+                                                                                    step_accuracy))
+                    results.append({'epoch': e, 'step': step,
+                                    'loss': loss, 'energy': step_energy, 'accuracy': step_accuracy},
+                                   ignore_index=True)
+            with open(os.path.join(self.result_path, 'R_{}.pkl'.format(r)), 'wb') as f:
+                pkl.dump(results, f)
+
+        if 'andrew' in os.getcwd():
+            model.save('/home/andrew/Documents/PhD/CDLQuantum/saved_models/rnn_r_{}'.format(r))
+
     def iterate_over_r(self):
         coeffs, samples, true_energies = self.return_coeffs_samples()
         self.n_vis = samples[0][0].element_spec.shape[-1]
-
         for coeff, (train, test), true_energy in zip(coeffs, samples, true_energies):
-            r = coeff[0]
-            print('\n\nR = {}'.format(r))
-            rnn = RNN(self.n_vis, self.n_hdn)
-            model = rnn.rnn
-            for e in range(self.epochs):
-                print('Start of epoch {}'.format(e))
-                for step, x_batch in enumerate(train):
-                    loss = self.train_step(model, x_batch)
-                    if step % 100 == 0:
-                        energies = []
-                        acc = []
-                        for init in test:
-                            test = tf.reshape(init, (1, BATCH_SIZE, self.n_vis))
-                            predictions = model.predict_on_batch(test)
-                            clip_pred = tf.clip_by_value(predictions, 0, 1)
-                            torch_pred = torch.from_numpy(clip_pred.numpy())
-                            energy = H2_energy_calculator.energy_from_freq(torch_pred, coeff)
-                            energies.append(energy)
-                            accuracy = 1 - np.abs(np.abs(energy - true_energy) / true_energy)
-                            acc.append(accuracy)
-                        print('Step: {}, loss: {}\nEnergy: {}\nAccuracy: {}'.format(step, loss,
-                                                                                    tf.reduce_mean(energies),
-                                                                                    tf.reduce_mean(acc)))
-            model.save('/home/andrew/Documents/PhD/CDLQuantum/saved_models/rnn_r_{}'.format(r))
-
-    # @tf.function
-    def train_step(self, model, batch):
-        with tf.GradientTape() as tape:
-            batch = tf.reshape(batch, (1, BATCH_SIZE, self.n_vis))
-            sample = model(batch)
-            loss = tf.reduce_mean(self.loss_fn(batch,  sample))
-        grads = tape.gradient(loss, model.trainable_weights)
-        self.optimiser.apply_gradients(zip(grads, model.trainable_weights))
-        return loss
+            self.create_and_train_rnn(coeff, train, test, true_energy)
 
 
 if __name__ == '__main__':
